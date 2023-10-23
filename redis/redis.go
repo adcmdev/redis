@@ -12,6 +12,7 @@ type CacheRepository interface {
 	Set(key, hashKey string, value interface{}) error
 	Exists(key string) (bool, error)
 	ExistsHash(key, hashKey string) (bool, error)
+	GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error)
 }
 
 type client struct {
@@ -68,4 +69,24 @@ func (c *client) ExistsHash(key, hashKey string) (bool, error) {
 	}
 
 	return e, nil
+}
+
+func (c *client) GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error) {
+	results := make(map[string][]byte)
+
+	for _, hKey := range hashKeys {
+		value, err := c.Client.HGet(key, hKey).Bytes()
+		if err == redis.Nil {
+			continue
+		}
+
+		if err != nil {
+			log.Fatal("error getting hash key: ", err)
+			return nil, err
+		}
+
+		results[hKey] = value
+	}
+
+	return results, nil
 }
