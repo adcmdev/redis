@@ -18,7 +18,7 @@ type client struct {
 	Client *redis.Client
 }
 
-func NewRedisClient(address, password string) CacheRepository {
+func NewClient(address, password string) CacheRepository {
 	var redisClient CacheRepository
 	var redisOnce sync.Once
 
