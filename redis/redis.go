@@ -3,13 +3,16 @@ package redis
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/go-redis/redis"
 )
 
 type CacheRepository interface {
-	Get(key, hashKey string) ([]byte, error)
-	Set(key, hashKey string, value interface{}) error
+	Get(key string) ([]byte, error)
+	GetHash(key, hashKey string) ([]byte, error)
+	Set(key string, value interface{}, expiration time.Duration) error
+	SetHash(key, hashKey string, value interface{}) error
 	Exists(key string) (bool, error)
 	ExistsHash(key, hashKey string) (bool, error)
 	GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error)
@@ -43,13 +46,23 @@ func NewClient(address, password string) CacheRepository {
 	return redisClient
 }
 
-func (c *client) Get(key, hashKey string) ([]byte, error) {
+func (c *client) Get(key string) ([]byte, error) {
+	result := c.Client.Get(key)
+
+	return result.Bytes()
+}
+
+func (c *client) GetHash(key, hashKey string) ([]byte, error) {
 	result := c.Client.HGet(key, hashKey)
 
 	return result.Bytes()
 }
 
-func (c *client) Set(key, hashKey string, value interface{}) error {
+func (c *client) Set(key string, value interface{}, expiration time.Duration) error {
+	return c.Client.Set(key, value, expiration).Err()
+}
+
+func (c *client) SetHash(key, hashKey string, value interface{}) error {
 	return c.Client.HSet(key, hashKey, value).Err()
 }
 
