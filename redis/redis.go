@@ -11,8 +11,8 @@ import (
 type CacheRepository interface {
 	Get(key string) ([]byte, error)
 	GetHash(key, hashKey string) ([]byte, error)
-	Set(key string, value interface{}, expiration time.Duration) error
-	SetHash(key, hashKey string, value interface{}) error
+	Set(key string, value []byte, expiration time.Duration) error
+	SetHash(key, hashKey string, value []byte) error
 	Exists(key string) (bool, error)
 	ExistsHash(key, hashKey string) (bool, error)
 	GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error)
@@ -58,11 +58,11 @@ func (c *client) GetHash(key, hashKey string) ([]byte, error) {
 	return result.Bytes()
 }
 
-func (c *client) Set(key string, value interface{}, expiration time.Duration) error {
+func (c *client) Set(key string, value []byte, expiration time.Duration) error {
 	return c.Client.Set(key, value, expiration).Err()
 }
 
-func (c *client) SetHash(key, hashKey string, value interface{}) error {
+func (c *client) SetHash(key, hashKey string, value []byte) error {
 	return c.Client.HSet(key, hashKey, value).Err()
 }
 
