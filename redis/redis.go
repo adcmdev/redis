@@ -37,7 +37,6 @@ func NewClient(address, password string) (CacheRepository, error) {
 		err = c.Ping().Err()
 
 		if err != nil {
-			log.Fatal("Error connecting to redis: ", err)
 			return
 		}
 
