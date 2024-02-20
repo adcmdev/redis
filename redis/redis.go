@@ -22,9 +22,10 @@ type client struct {
 	Client *redis.Client
 }
 
-func NewClient(address, password string) CacheRepository {
+func NewClient(address, password string) (CacheRepository, error) {
 	var redisClient CacheRepository
 	var redisOnce sync.Once
+	var err error
 
 	redisOnce.Do(func() {
 		c := redis.NewClient(&redis.Options{
@@ -33,7 +34,9 @@ func NewClient(address, password string) CacheRepository {
 			DB:       0,
 		})
 
-		if err := c.Ping().Err(); err != nil {
+		err = c.Ping().Err()
+
+		if err != nil {
 			log.Fatal("Error connecting to redis: ", err)
 			return
 		}
@@ -43,7 +46,11 @@ func NewClient(address, password string) CacheRepository {
 		}
 	})
 
-	return redisClient
+	if err != nil {
+		return nil, err
+	}
+
+	return redisClient, nil
 }
 
 func (c *client) Get(key string) ([]byte, error) {
