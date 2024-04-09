@@ -2,6 +2,7 @@ package redis
 
 import (
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -19,61 +20,88 @@ type CacheRepository interface {
 }
 
 type client struct {
-	Client *redis.Client
+	ReadClient  *redis.Client
+	WriteClient *redis.Client
 }
 
-func NewClient(address, password string) (CacheRepository, error) {
-	var redisClient CacheRepository
+func NewClient() (redisRepository CacheRepository, err error) {
 	var redisOnce sync.Once
-	var err error
+
+	readAddress := getReadAddress()
+	writeAddress := getWriteAddress()
 
 	redisOnce.Do(func() {
-		c := redis.NewClient(&redis.Options{
-			Addr:     address,
-			Password: password,
+		readClient := redis.NewClient(&redis.Options{
+			Addr:     readAddress,
+			Password: "",
 			DB:       0,
 		})
 
-		err = c.Ping().Err()
+		writeClient := redis.NewClient(&redis.Options{
+			Addr:     writeAddress,
+			Password: "",
+			DB:       0,
+		})
 
+		err = readClient.Ping().Err()
 		if err != nil {
 			return
 		}
 
-		redisClient = &client{
-			Client: c,
+		err = writeClient.Ping().Err()
+		if err != nil {
+			return
+		}
+
+		redisRepository = &client{
+			ReadClient:  readClient,
+			WriteClient: writeClient,
 		}
 	})
 
-	if err != nil {
-		return nil, err
+	return
+}
+
+func getReadAddress() string {
+	host := os.Getenv("GLOBAL_REDIS_HOST_READ")
+	if host == "" {
+		host = "localhost"
 	}
 
-	return redisClient, nil
+	return host + ":6379"
+}
+
+func getWriteAddress() string {
+	host := os.Getenv("GLOBAL_REDIS_HOST")
+	if host == "" {
+		host = "localhost"
+	}
+
+	return host + ":6379"
 }
 
 func (c *client) Get(key string) ([]byte, error) {
-	result := c.Client.Get(key)
+	result := c.ReadClient.Get(key)
 
 	return result.Bytes()
 }
 
 func (c *client) GetHash(key, hashKey string) ([]byte, error) {
-	result := c.Client.HGet(key, hashKey)
+	result := c.ReadClient.HGet(key, hashKey)
 
 	return result.Bytes()
 }
 
 func (c *client) Set(key string, value []byte, expiration time.Duration) error {
-	return c.Client.Set(key, value, expiration).Err()
+	return c.WriteClient.Set(key, value, expiration).Err()
 }
 
 func (c *client) SetHash(key, hashKey string, value []byte) error {
-	return c.Client.HSet(key, hashKey, value).Err()
+	return c.WriteClient.HSet(key, hashKey, value).Err()
 }
 
 func (c *client) Exists(key string) (bool, error) {
-	e, err := c.Client.Exists(key).Result()
+	e, err := c.ReadClient.Exists(key).Result()
 	if err != nil {
 		return false, err
 	}
@@ -82,7 +110,7 @@ func (c *client) Exists(key string) (bool, error) {
 }
 
 func (c *client) ExistsHash(key, hashKey string) (bool, error) {
-	e, err := c.Client.HExists(key, hashKey).Result()
+	e, err := c.ReadClient.HExists(key, hashKey).Result()
 	if err != nil {
 		return false, err
 	}
@@ -94,7 +122,7 @@ func (c *client) GetMultipleHashKeys(key string, hashKeys []string) (map[string]
 	results := make(map[string][]byte)
 
 	for _, hKey := range hashKeys {
-		value, err := c.Client.HGet(key, hKey).Bytes()
+		value, err := c.ReadClient.HGet(key, hKey).Bytes()
 		if err == redis.Nil {
 			continue
 		}
