@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"crypto/tls"
 	"log"
 	"os"
 	"sync"
@@ -32,17 +31,14 @@ type client struct {
 func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 	var redisOnce sync.Once
 
-	readAddress := getReadAddress()
+	address := getAddress()
 
 	redisOnce.Do(func() {
-		readClient := redis.NewClient(&redis.Options{
-			Addr:     readAddress,
-			PoolSize: 50,
-			TLSConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true,
+		readClient := redis.NewClient(
+			&redis.Options{
+				Addr: address,
 			},
-		})
+		)
 
 		err = readClient.Ping().Err()
 		if err != nil {
@@ -50,7 +46,6 @@ func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 		}
 
 		prefixValue := ""
-
 		if len(prefix) > 0 {
 			prefixValue = prefix[0]
 		}
@@ -64,7 +59,7 @@ func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 	return
 }
 
-func getReadAddress() string {
+func getAddress() string {
 	host := os.Getenv("REDIS_HOST")
 	if host == "" {
 		host = "localhost"
