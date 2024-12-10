@@ -65,7 +65,7 @@ func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 }
 
 func getReadAddress() string {
-	host := os.Getenv("REDIS_HOST_READ")
+	host := os.Getenv("REDIS_HOST")
 	if host == "" {
 		host = "localhost"
 	}
