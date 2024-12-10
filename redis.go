@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"crypto/tls"
 	"log"
 	"os"
 	"sync"
@@ -11,20 +12,25 @@ import (
 
 type CacheRepository interface {
 	Get(key string) ([]byte, error)
+	GetAllKeys(prefix string, size ...int) ([]string, error)
 	GetHash(key, hashKey string) ([]byte, error)
 	Set(key string, value []byte, expiration time.Duration) error
 	SetHash(key, hashKey string, value []byte) error
 	Exists(key string) (bool, error)
 	ExistsHash(key, hashKey string) (bool, error)
 	GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error)
+	Delete(key string) error
+	DeleteHash(key, hashKey string) error
+	DeleteAll(prefix string) error
 }
 
 type client struct {
-	ReadClient  *redis.Client
-	WriteClient *redis.Client
+	readClient  *redis.Client
+	writeClient *redis.Client
+	prefix      string
 }
 
-func NewClient() (redisRepository CacheRepository, err error) {
+func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 	var redisOnce sync.Once
 
 	readAddress := getReadAddress()
@@ -33,14 +39,20 @@ func NewClient() (redisRepository CacheRepository, err error) {
 	redisOnce.Do(func() {
 		readClient := redis.NewClient(&redis.Options{
 			Addr:     readAddress,
-			Password: "",
-			DB:       0,
+			PoolSize: 50,
+			TLSConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true,
+			},
 		})
 
 		writeClient := redis.NewClient(&redis.Options{
 			Addr:     writeAddress,
-			Password: "",
-			DB:       0,
+			PoolSize: 50,
+			TLSConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true,
+			},
 		})
 
 		err = readClient.Ping().Err()
@@ -53,9 +65,16 @@ func NewClient() (redisRepository CacheRepository, err error) {
 			return
 		}
 
+		prefixValue := ""
+
+		if len(prefix) > 0 {
+			prefixValue = prefix[0]
+		}
+
 		redisRepository = &client{
-			ReadClient:  readClient,
-			WriteClient: writeClient,
+			readClient:  readClient,
+			writeClient: writeClient,
+			prefix:      prefixValue,
 		}
 	})
 
@@ -81,27 +100,27 @@ func getWriteAddress() string {
 }
 
 func (c *client) Get(key string) ([]byte, error) {
-	result := c.ReadClient.Get(key)
+	result := c.readClient.Get(c.prefix + key)
 
 	return result.Bytes()
 }
 
 func (c *client) GetHash(key, hashKey string) ([]byte, error) {
-	result := c.ReadClient.HGet(key, hashKey)
+	result := c.readClient.HGet(c.prefix+key, hashKey)
 
 	return result.Bytes()
 }
 
 func (c *client) Set(key string, value []byte, expiration time.Duration) error {
-	return c.WriteClient.Set(key, value, expiration).Err()
+	return c.writeClient.Set(c.prefix+key, value, expiration).Err()
 }
 
 func (c *client) SetHash(key, hashKey string, value []byte) error {
-	return c.WriteClient.HSet(key, hashKey, value).Err()
+	return c.writeClient.HSet(c.prefix+key, hashKey, value).Err()
 }
 
 func (c *client) Exists(key string) (bool, error) {
-	e, err := c.ReadClient.Exists(key).Result()
+	e, err := c.readClient.Exists(c.prefix + key).Result()
 	if err != nil {
 		return false, err
 	}
@@ -110,7 +129,7 @@ func (c *client) Exists(key string) (bool, error) {
 }
 
 func (c *client) ExistsHash(key, hashKey string) (bool, error) {
-	e, err := c.ReadClient.HExists(key, hashKey).Result()
+	e, err := c.readClient.HExists(c.prefix+key, hashKey).Result()
 	if err != nil {
 		return false, err
 	}
@@ -122,7 +141,7 @@ func (c *client) GetMultipleHashKeys(key string, hashKeys []string) (map[string]
 	results := make(map[string][]byte)
 
 	for _, hKey := range hashKeys {
-		value, err := c.ReadClient.HGet(key, hKey).Bytes()
+		value, err := c.readClient.HGet(c.prefix+key, hKey).Bytes()
 		if err == redis.Nil {
 			continue
 		}
@@ -136,4 +155,62 @@ func (c *client) GetMultipleHashKeys(key string, hashKeys []string) (map[string]
 	}
 
 	return results, nil
+}
+
+func (c *client) Delete(key string) error {
+	return c.writeClient.Del(c.prefix + key).Err()
+}
+
+func (c *client) DeleteHash(key, hashKey string) error {
+	return c.writeClient.HDel(c.prefix+key, hashKey).Err()
+}
+
+func (c *client) GetAllKeys(prefix string, size ...int) ([]string, error) {
+	var pageSize int64
+
+	if len(size) > 0 {
+		pageSize = int64(size[0])
+	} else {
+		pageSize = 10
+	}
+
+	fullPrefix := c.prefix + prefix + "*"
+
+	var cursor uint64
+	var keys []string
+	var err error
+
+	for {
+		var scannedKeys []string
+		scannedKeys, cursor, err = c.readClient.Scan(cursor, fullPrefix, pageSize).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(scannedKeys) > 0 {
+			keys = append(keys, scannedKeys...)
+		}
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	return keys, nil
+}
+
+func (c *client) DeleteAll(prefix string) error {
+	keys, err := c.GetAllKeys(prefix)
+	if err != nil {
+		return err
+	}
+
+	if len(keys) > 0 {
+		_, err := c.writeClient.Del(keys...).Result()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

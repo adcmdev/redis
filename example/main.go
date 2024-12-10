@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"bitbucket.org/Soytul/library-go-redis/redis"
+	"github.com/adcmdev/redis"
 )
 
 func main() {
