@@ -21,6 +21,10 @@ type CacheRepository interface {
 	Delete(key string) error
 	DeleteHash(key, hashKey string) error
 	DeleteAll(prefix string) error
+
+	// Streams
+	Emit(topic string, message map[string]interface{}) error
+	Listen(topic string, callback func(values map[string]interface{}))
 }
 
 type client struct {
