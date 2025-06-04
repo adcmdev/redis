@@ -23,8 +23,8 @@ type CacheRepository interface {
 	DeleteAll(prefix string) error
 
 	// Streams
-	Emit(topic string, message map[string]interface{}) error
-	Listen(topic string, callback func(values map[string]interface{}))
+	Emit(topic string, message []byte) error
+	Listen(topic string, callback func(data []byte))
 }
 
 type client struct {
