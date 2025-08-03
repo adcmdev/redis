@@ -67,6 +67,10 @@ func getAddress(host string) string {
 	const defaultPort = "6379"
 	const defaultHost = "localhost" + ":" + defaultPort
 
+	if host != "" {
+		return host
+	}
+
 	if host == "" {
 		return defaultHost
 	}
