@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	redisClient, err := redis.NewClient()
+	redisClient, err := redis.NewClient("")
 	if err != nil {
 		fmt.Println("Error creating redis client: ", err)
 		return

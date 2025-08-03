@@ -32,10 +32,10 @@ type client struct {
 	prefix      string
 }
 
-func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
+func NewClient(host string, prefix ...string) (redisRepository CacheRepository, err error) {
 	var redisOnce sync.Once
 
-	address := getAddress()
+	address := getAddress(host)
 
 	redisOnce.Do(func() {
 		readClient := redis.NewClient(
@@ -63,13 +63,20 @@ func NewClient(prefix ...string) (redisRepository CacheRepository, err error) {
 	return
 }
 
-func getAddress() string {
-	host := os.Getenv("REDIS_HOST")
+func getAddress(host string) string {
+	const defaultPort = "6379"
+	const defaultHost = "localhost" + ":" + defaultPort
+
 	if host == "" {
-		host = "localhost"
+		return defaultHost
 	}
 
-	return host + ":6379"
+	host = os.Getenv("REDIS_HOST")
+	if host == "" {
+		return defaultHost
+	}
+
+	return host + ":" + defaultPort
 }
 
 func (c *client) Get(key string) ([]byte, error) {
