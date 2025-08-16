@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/adcmdev/redis"
+	"github.com/innovafour/redis"
 )
 
 func main() {
