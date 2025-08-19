@@ -32,31 +32,44 @@ type client struct {
 	prefix      string
 }
 
-func NewClient(host string, prefix ...string) (redisRepository CacheRepository, err error) {
+func NewClient(dto CreateNewRedisDTO) (redisRepository CacheRepository, err error) {
 	var redisOnce sync.Once
 
-	address := getAddress(host)
+	address := getAddress(dto.Host)
+	if dto.Network == "" {
+		dto.Network = "tcp"
+	}
 
 	redisOnce.Do(func() {
-		readClient := redis.NewClient(
-			&redis.Options{
-				Addr: address,
-			},
-		)
+		readClient := redis.NewClient(&redis.Options{
+			Network:            dto.Network,
+			Addr:               address,
+			Password:           dto.Password,
+			DB:                 dto.DB,
+			MaxRetries:         dto.MaxRetries,
+			MinRetryBackoff:    dto.MinRetryBackoff,
+			MaxRetryBackoff:    dto.MaxRetryBackoff,
+			DialTimeout:        dto.DialTimeout,
+			ReadTimeout:        dto.ReadTimeout,
+			WriteTimeout:       dto.WriteTimeout,
+			PoolSize:           dto.PoolSize,
+			MinIdleConns:       dto.MinIdleConns,
+			MaxConnAge:         dto.MaxConnAge,
+			PoolTimeout:        dto.PoolTimeout,
+			IdleTimeout:        dto.IdleTimeout,
+			IdleCheckFrequency: dto.IdleCheckFrequency,
+			TLSConfig:          dto.TLSConfig,
+			OnConnect:          dto.OnConnect,
+		})
 
 		err = readClient.Ping().Err()
 		if err != nil {
 			return
 		}
 
-		prefixValue := ""
-		if len(prefix) > 0 {
-			prefixValue = prefix[0]
-		}
-
 		redisRepository = &client{
 			redisClient: readClient,
-			prefix:      prefixValue,
+			prefix:      dto.Prefix,
 		}
 	})
 
