@@ -25,7 +25,7 @@ type CacheRepository interface {
 
 	// Streams
 	Emit(topic string, message []byte) error
-	Listen(ctx context.Context, topic string, callback func(data []byte))
+	ListenGroup(ctx context.Context, topic, group string, callback func(data []byte)) error
 
 	// Pub/Sub
 	Pub(topic string, message []byte) error
