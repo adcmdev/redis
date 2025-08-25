@@ -24,11 +24,6 @@ type CacheRepository interface {
 	DeleteHash(key, hashKey string) error
 	DeleteAll(prefix string) error
 
-	// Streams
-	Emit(topicPrefix, partitionKey string, message []byte, shards int) error
-	ListenGroup(ctx context.Context, topic, group string, callback func(data [][]byte)) error
-	ListenGroupSharded(ctx context.Context, topicPrefix, group string, shards int, callback func(data [][]byte)) error
-
 	// Pub/Sub
 	Pub(topic string, message []byte) error
 	Sub(ctx context.Context, topic string, callback func(data []byte))
