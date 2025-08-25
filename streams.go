@@ -54,6 +54,16 @@ func (c *client) Sub(ctx context.Context, topic string, callback func(data []byt
 	}()
 }
 
+func streamForKey(prefix string, key string, shards int) string {
+	if shards <= 1 || key == "" {
+		return prefix
+	}
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	idx := int(h.Sum32()) % shards
+	return fmt.Sprintf("%s:%d", prefix, idx)
+}
+
 func (c *client) Emit(topicPrefix, partitionKey string, message []byte, shards int) error {
 	stream := streamForKey(topicPrefix, partitionKey, shards)
 
@@ -61,13 +71,6 @@ func (c *client) Emit(topicPrefix, partitionKey string, message []byte, shards i
 		Stream: stream,
 		Values: map[string]interface{}{"msg": message},
 	}).Err()
-}
-
-func streamForKey(prefix string, key string, shards int) string {
-	h := fnv.New32a()
-	h.Write([]byte(key))
-	idx := int(h.Sum32()) % shards
-	return fmt.Sprintf("%s:%d", prefix, idx)
 }
 
 func (c *client) ListenGroup(ctx context.Context, topic, group string, callback func(data [][]byte)) error {
@@ -81,7 +84,7 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 
 	const (
 		minBatchSize int64         = 100
-		maxBatchSize int64         = 200
+		maxBatchSize int64         = 500
 		maxIdle      time.Duration = 5 * time.Minute
 		blockTime    time.Duration = 2 * time.Second
 	)
@@ -111,9 +114,15 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 						break
 					}
 
-					idsToClaim := make([]string, len(pending))
-					for i, msg := range pending {
-						idsToClaim[i] = msg.Id
+					var idsToClaim []string
+					for _, msg := range pending {
+						if msg.Idle >= maxIdle {
+							idsToClaim = append(idsToClaim, msg.Id)
+						}
+					}
+
+					if len(idsToClaim) == 0 {
+						break
 					}
 
 					res, err := c.redisClient.XClaim(&redis.XClaimArgs{
@@ -182,6 +191,18 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 				}
 			}
 		}()
+	}
+
+	return nil
+}
+
+func (c *client) ListenGroupSharded(ctx context.Context, topicPrefix, group string, shards int, callback func(data [][]byte)) error {
+	for shard := 0; shard < shards; shard++ {
+		stream := fmt.Sprintf("%s:%d", topicPrefix, shard)
+
+		if err := c.ListenGroup(ctx, stream, group, callback); err != nil {
+			return err
+		}
 	}
 
 	return nil
