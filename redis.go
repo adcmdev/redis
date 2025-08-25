@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -49,10 +48,6 @@ func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
 		dto.Network = "tcp"
 	}
 
-	if dto.Password == "" && address != "localhost:6379" {
-		return nil, fmt.Errorf("redis password is required for non-local connections")
-	}
-
 	redisOnce.Do(func() {
 		readClient := redis.NewClient(&redis.Options{
 			Network: dto.Network,
@@ -79,7 +74,6 @@ func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
 			TLSConfig: dto.TLSConfig,
 
 			OnConnect: func(conn *redis.Conn) error {
-				log.Println("🔐 Secure Redis connection established:", address)
 				return nil
 			},
 		})
