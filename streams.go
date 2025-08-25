@@ -2,11 +2,13 @@ package redis
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
+	"log"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -52,25 +54,38 @@ func (c *client) Sub(ctx context.Context, topic string, callback func(data []byt
 	}()
 }
 
-func (c *client) Emit(topic string, message []byte) error {
+func (c *client) Emit(topicPrefix, partitionKey string, message []byte, shards int) error {
+	stream := streamForKey(topicPrefix, partitionKey, shards)
+
 	return c.redisClient.XAdd(&redis.XAddArgs{
-		Stream: topic,
+		Stream: stream,
 		Values: map[string]interface{}{"msg": message},
-		MaxLen: maxLen,
 	}).Err()
 }
 
-func (c *client) ListenGroup(ctx context.Context, topic, group string, callback func(data []byte)) error {
+func streamForKey(prefix string, key string, shards int) string {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	idx := int(h.Sum32()) % shards
+	return fmt.Sprintf("%s:%d", prefix, idx)
+}
+
+func (c *client) ListenGroup(ctx context.Context, topic, group string, callback func(data [][]byte)) error {
 	err := c.redisClient.XGroupCreateMkStream(topic, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return err
 	}
 
 	numCPU := runtime.NumCPU()
-	workerCount := numCPU * 4
-	var batchSize int64 = 1000
-	var processed int64 = 0
-	const maxIdle = 5 * time.Minute
+	workerCount := numCPU * 2
+	const (
+		minBatchSize int64         = 100
+		maxBatchSize int64         = 2000
+		maxIdle      time.Duration = 5 * time.Minute
+		blockTime    time.Duration = 2 * time.Second
+	)
+
+	batchSize := minBatchSize
 
 	for w := 0; w < workerCount; w++ {
 		consumerName := consumerPrefix + "_" + strconv.Itoa(w)
@@ -83,6 +98,7 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 				default:
 				}
 
+				// 1️⃣ Reclamar mensajes pendientes
 				pending, _ := c.redisClient.XPendingExt(&redis.XPendingExtArgs{
 					Stream: topic,
 					Group:  group,
@@ -107,53 +123,61 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 						Messages: idsToClaim,
 					}).Result()
 
-					var idsToAck []string
-					for _, msg := range res {
-						data := msg.Values["msg"].(string)
-						go callback([]byte(data))
-						idsToAck = append(idsToAck, msg.ID)
-						atomic.AddInt64(&processed, 1)
-					}
-					if len(idsToAck) > 0 {
-						c.redisClient.XAck(topic, group, idsToAck...)
-						c.redisClient.XDel(topic, idsToAck...)
+					if len(res) > 0 {
+						var dataBatch [][]byte
+						var ids []string
+						for _, msg := range res {
+							raw := msg.Values["msg"].(string)
+							dataBatch = append(dataBatch, []byte(raw))
+							ids = append(ids, msg.ID)
+						}
+
+						callback(dataBatch)
+						c.redisClient.XAck(topic, group, ids...)
+						c.redisClient.XDel(topic, ids...)
 					}
 				}
 
-				res, err := c.redisClient.XReadGroup(&redis.XReadGroupArgs{
+				// 2️⃣ Leer mensajes nuevos
+				streams, err := c.redisClient.XReadGroup(&redis.XReadGroupArgs{
 					Group:    group,
 					Consumer: consumerName,
 					Streams:  []string{topic, ">"},
 					Count:    batchSize,
-					Block:    0,
+					Block:    blockTime,
 				}).Result()
 
-				if err == nil {
-					var idsToAck []string
-					for _, stream := range res {
-						for _, msg := range stream.Messages {
-							data := msg.Values["msg"].(string)
-							go callback([]byte(data))
-							idsToAck = append(idsToAck, msg.ID)
-							atomic.AddInt64(&processed, 1)
-						}
-					}
-					if len(idsToAck) > 0 {
-						c.redisClient.XAck(topic, group, idsToAck...)
-						c.redisClient.XDel(topic, idsToAck...)
-					}
-				} else {
+				if err == redis.Nil {
+					continue
+				} else if err != nil {
+					log.Printf("XReadGroup error: %v", err)
 					time.Sleep(time.Second)
+					continue
 				}
 
-				if atomic.LoadInt64(&processed) >= 10000 {
-					atomic.StoreInt64(&processed, 0)
-					streamLen, _ := c.redisClient.XLen(topic).Result()
-					if streamLen > batchSize*2 {
-						batchSize = int64(math.Min(float64(batchSize)*1.5, 10000))
-					} else if streamLen < batchSize/2 {
-						batchSize = int64(math.Max(float64(batchSize)/1.5, 500))
+				for _, s := range streams {
+					if len(s.Messages) == 0 {
+						continue
 					}
+
+					var dataBatch [][]byte
+					var ids []string
+					for _, msg := range s.Messages {
+						raw := msg.Values["msg"].(string)
+						dataBatch = append(dataBatch, []byte(raw))
+						ids = append(ids, msg.ID)
+					}
+
+					callback(dataBatch)
+					c.redisClient.XAck(topic, group, ids...)
+					c.redisClient.XDel(topic, ids...)
+				}
+
+				streamLen, _ := c.redisClient.XLen(topic).Result()
+				if streamLen > batchSize*2 {
+					batchSize = int64(math.Min(float64(batchSize)*1.2, float64(maxBatchSize)))
+				} else if streamLen < batchSize/2 {
+					batchSize = int64(math.Max(float64(batchSize)/1.2, float64(minBatchSize)))
 				}
 			}
 		}()

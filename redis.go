@@ -25,8 +25,8 @@ type CacheRepository interface {
 	DeleteAll(prefix string) error
 
 	// Streams
-	Emit(topic string, message []byte) error
-	ListenGroup(ctx context.Context, topic, group string, callback func(data []byte)) error
+	Emit(topicPrefix, partitionKey string, message []byte, shards int) error
+	ListenGroup(ctx context.Context, topic, group string, callback func(data [][]byte)) error
 
 	// Pub/Sub
 	Pub(topic string, message []byte) error
@@ -50,35 +50,34 @@ func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
 
 	redisOnce.Do(func() {
 		readClient := redis.NewClient(&redis.Options{
-			Network: dto.Network,
-			Addr:    address,
-
+			Network:  dto.Network,
+			Addr:     address,
 			Password: dto.Password,
 			DB:       dto.DB,
 
-			DialTimeout:  5 * time.Second,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			DialTimeout:  10 * time.Second,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
 
 			MaxRetries:      5,
 			MinRetryBackoff: 50 * time.Millisecond,
 			MaxRetryBackoff: 2 * time.Second,
 
-			PoolSize:           10 * runtime.NumCPU(),
-			MinIdleConns:       runtime.NumCPU(),
-			IdleTimeout:        5 * time.Minute,
-			MaxConnAge:         30 * time.Minute,
-			PoolTimeout:        5 * time.Second,
+			PoolSize:     64 * runtime.NumCPU(),
+			MinIdleConns: 16 * runtime.NumCPU(),
+			IdleTimeout:  5 * time.Minute,
+			MaxConnAge:   30 * time.Minute,
+			PoolTimeout:  30 * time.Second,
+
 			IdleCheckFrequency: time.Minute,
-
-			TLSConfig: dto.TLSConfig,
-
+			TLSConfig:          dto.TLSConfig,
 			OnConnect: func(conn *redis.Conn) error {
 				return nil
 			},
 		})
 
 		err = readClient.Ping().Err()
+
 		if err != nil {
 			return
 		}
