@@ -24,6 +24,10 @@ type CacheRepository interface {
 	DeleteAll(prefix string) error
 
 	// Streams
+	Emit(topic string, message []byte) error
+	Listen(ctx context.Context, topic string, callback func(data []byte))
+
+	// Pub/Sub
 	Pub(topic string, message []byte) error
 	Sub(ctx context.Context, topic string, callback func(data []byte))
 }
