@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"log"
 	"os"
 	"sync"
@@ -24,7 +25,7 @@ type CacheRepository interface {
 
 	// Streams
 	Pub(topic string, message []byte) error
-	Sub(topic string, callback func(data []byte))
+	Sub(ctx context.Context, topic string, callback func(data []byte))
 }
 
 type client struct {
