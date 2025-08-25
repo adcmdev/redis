@@ -78,9 +78,10 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 
 	numCPU := runtime.NumCPU()
 	workerCount := numCPU * 2
+
 	const (
 		minBatchSize int64         = 100
-		maxBatchSize int64         = 2000
+		maxBatchSize int64         = 200
 		maxIdle      time.Duration = 5 * time.Minute
 		blockTime    time.Duration = 2 * time.Second
 	)
@@ -98,47 +99,47 @@ func (c *client) ListenGroup(ctx context.Context, topic, group string, callback 
 				default:
 				}
 
-				// 1️⃣ Reclamar mensajes pendientes
-				pending, _ := c.redisClient.XPendingExt(&redis.XPendingExtArgs{
-					Stream: topic,
-					Group:  group,
-					Start:  "-",
-					End:    "+",
-					Count:  batchSize,
-				}).Result()
-
-				var idsToClaim []string
-				for _, pend := range pending {
-					if pend.Idle >= maxIdle {
-						idsToClaim = append(idsToClaim, pend.Id)
+				for {
+					pending, err := c.redisClient.XPendingExt(&redis.XPendingExtArgs{
+						Stream: topic,
+						Group:  group,
+						Start:  "-",
+						End:    "+",
+						Count:  batchSize,
+					}).Result()
+					if err != nil || len(pending) == 0 {
+						break
 					}
-				}
 
-				if len(idsToClaim) > 0 {
-					res, _ := c.redisClient.XClaim(&redis.XClaimArgs{
+					idsToClaim := make([]string, len(pending))
+					for i, msg := range pending {
+						idsToClaim[i] = msg.Id
+					}
+
+					res, err := c.redisClient.XClaim(&redis.XClaimArgs{
 						Stream:   topic,
 						Group:    group,
 						Consumer: consumerName,
 						MinIdle:  0,
 						Messages: idsToClaim,
 					}).Result()
-
-					if len(res) > 0 {
-						var dataBatch [][]byte
-						var ids []string
-						for _, msg := range res {
-							raw := msg.Values["msg"].(string)
-							dataBatch = append(dataBatch, []byte(raw))
-							ids = append(ids, msg.ID)
-						}
-
-						callback(dataBatch)
-						c.redisClient.XAck(topic, group, ids...)
-						c.redisClient.XDel(topic, ids...)
+					if err != nil || len(res) == 0 {
+						break
 					}
+
+					var dataBatch [][]byte
+					var ids []string
+					for _, msg := range res {
+						raw := msg.Values["msg"].(string)
+						dataBatch = append(dataBatch, []byte(raw))
+						ids = append(ids, msg.ID)
+					}
+
+					callback(dataBatch)
+					c.redisClient.XAck(topic, group, ids...)
+					c.redisClient.XDel(topic, ids...)
 				}
 
-				// 2️⃣ Leer mensajes nuevos
 				streams, err := c.redisClient.XReadGroup(&redis.XReadGroupArgs{
 					Group:    group,
 					Consumer: consumerName,
