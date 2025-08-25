@@ -2,8 +2,10 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -37,34 +39,49 @@ type client struct {
 	prefix      string
 }
 
-func NewClient(dto CreateNewRedisDTO) (redisRepository CacheRepository, err error) {
+func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
 	var redisOnce sync.Once
+	var redisRepository CacheRepository
+	var err error
 
 	address := getAddress(dto.Host)
 	if dto.Network == "" {
 		dto.Network = "tcp"
 	}
 
+	if dto.Password == "" && address != "localhost:6379" {
+		return nil, fmt.Errorf("redis password is required for non-local connections")
+	}
+
 	redisOnce.Do(func() {
 		readClient := redis.NewClient(&redis.Options{
-			Network:            dto.Network,
-			Addr:               address,
-			Password:           dto.Password,
-			DB:                 dto.DB,
-			MaxRetries:         dto.MaxRetries,
-			MinRetryBackoff:    dto.MinRetryBackoff,
-			MaxRetryBackoff:    dto.MaxRetryBackoff,
-			DialTimeout:        dto.DialTimeout,
-			ReadTimeout:        dto.ReadTimeout,
-			WriteTimeout:       dto.WriteTimeout,
-			PoolSize:           dto.PoolSize,
-			MinIdleConns:       dto.MinIdleConns,
-			MaxConnAge:         dto.MaxConnAge,
-			PoolTimeout:        dto.PoolTimeout,
-			IdleTimeout:        dto.IdleTimeout,
-			IdleCheckFrequency: dto.IdleCheckFrequency,
-			TLSConfig:          dto.TLSConfig,
-			OnConnect:          dto.OnConnect,
+			Network: dto.Network,
+			Addr:    address,
+
+			Password: dto.Password,
+			DB:       dto.DB,
+
+			DialTimeout:  5 * time.Second,
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+
+			MaxRetries:      5,
+			MinRetryBackoff: 50 * time.Millisecond,
+			MaxRetryBackoff: 2 * time.Second,
+
+			PoolSize:           10 * runtime.NumCPU(),
+			MinIdleConns:       runtime.NumCPU(),
+			IdleTimeout:        5 * time.Minute,
+			MaxConnAge:         30 * time.Minute,
+			PoolTimeout:        5 * time.Second,
+			IdleCheckFrequency: time.Minute,
+
+			TLSConfig: dto.TLSConfig,
+
+			OnConnect: func(conn *redis.Conn) error {
+				log.Println("🔐 Secure Redis connection established:", address)
+				return nil
+			},
 		})
 
 		err = readClient.Ping().Err()
@@ -78,7 +95,7 @@ func NewClient(dto CreateNewRedisDTO) (redisRepository CacheRepository, err erro
 		}
 	})
 
-	return
+	return redisRepository, err
 }
 
 func getAddress(host string) string {
