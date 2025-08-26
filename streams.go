@@ -7,7 +7,7 @@ import (
 )
 
 func (c *client) Pub(topic string, message []byte) error {
-	return c.redisClient.Publish(topic, message).Err()
+	return c.redisClient.Publish(context.Background(), topic, message).Err()
 }
 
 func (c *client) Sub(ctx context.Context, topic string, callback func(data []byte)) {
@@ -21,12 +21,11 @@ func (c *client) Sub(ctx context.Context, topic string, callback func(data []byt
 			default:
 			}
 
-			pubsub := c.redisClient.Subscribe(topic)
+			pubsub := c.redisClient.Subscribe(ctx, topic)
 
-			_, err := pubsub.Receive()
-			if err != nil {
+			if _, err := pubsub.Receive(ctx); err != nil {
 				log.Printf("Redis subscribe error: %v", err)
-				pubsub.Close()
+				_ = pubsub.Close()
 				attempt++
 				time.Sleep(backoffDuration(attempt))
 				continue
@@ -41,7 +40,9 @@ func (c *client) Sub(ctx context.Context, topic string, callback func(data []byt
 					if !ok {
 						goto RESUB
 					}
-					callback([]byte(msg.Payload))
+					if msg != nil {
+						callback([]byte(msg.Payload))
+					}
 				case <-ctx.Done():
 					_ = pubsub.Close()
 					return

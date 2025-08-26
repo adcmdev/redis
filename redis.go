@@ -2,13 +2,13 @@ package redis
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
 	"runtime"
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis"
+	"github.com/redis/go-redis/v9"
 )
 
 type CacheRepository interface {
@@ -27,6 +27,7 @@ type CacheRepository interface {
 	// Pub/Sub
 	Pub(topic string, message []byte) error
 	Sub(ctx context.Context, topic string, callback func(data []byte))
+	Close() error
 }
 
 type client struct {
@@ -34,18 +35,20 @@ type client struct {
 	prefix      string
 }
 
+var (
+	once           sync.Once
+	clientInstance *client
+	initErr        error
+)
+
 func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
-	var redisOnce sync.Once
-	var redisRepository CacheRepository
-	var err error
+	once.Do(func() {
+		address := getAddress(dto.Host)
+		if dto.Network == "" {
+			dto.Network = "tcp"
+		}
 
-	address := getAddress(dto.Host)
-	if dto.Network == "" {
-		dto.Network = "tcp"
-	}
-
-	redisOnce.Do(func() {
-		readClient := redis.NewClient(&redis.Options{
+		rdb := redis.NewClient(&redis.Options{
 			Network:  dto.Network,
 			Addr:     address,
 			Password: dto.Password,
@@ -59,44 +62,36 @@ func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
 			MinRetryBackoff: 50 * time.Millisecond,
 			MaxRetryBackoff: 2 * time.Second,
 
-			PoolSize:     64 * runtime.NumCPU(),
-			MinIdleConns: 16 * runtime.NumCPU(),
-			IdleTimeout:  5 * time.Minute,
-			MaxConnAge:   30 * time.Minute,
+			PoolSize:     10 * runtime.NumCPU(),
+			MinIdleConns: 2 * runtime.NumCPU(),
 			PoolTimeout:  30 * time.Second,
 
-			IdleCheckFrequency: time.Minute,
-			TLSConfig:          dto.TLSConfig,
-			OnConnect: func(conn *redis.Conn) error {
+			TLSConfig: dto.TLSConfig,
+			OnConnect: func(ctx context.Context, cn *redis.Conn) error {
 				return nil
 			},
 		})
 
-		err = readClient.Ping().Err()
-
-		if err != nil {
+		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			initErr = err
 			return
 		}
 
-		redisRepository = &client{
-			redisClient: readClient,
+		clientInstance = &client{
+			redisClient: rdb,
 			prefix:      dto.Prefix,
 		}
 	})
 
-	return redisRepository, err
+	return clientInstance, initErr
 }
 
 func getAddress(host string) string {
 	const defaultPort = "6379"
-	const defaultHost = "localhost" + ":" + defaultPort
+	const defaultHost = "localhost:" + defaultPort
 
 	if host != "" {
 		return host
-	}
-
-	if host == "" {
-		return defaultHost
 	}
 
 	host = os.Getenv("REDIS_HOST")
@@ -108,74 +103,68 @@ func getAddress(host string) string {
 }
 
 func (c *client) Get(key string) ([]byte, error) {
-	result := c.redisClient.Get(c.prefix + key)
-
-	return result.Bytes()
+	return c.redisClient.Get(context.Background(), c.prefix+key).Bytes()
 }
 
 func (c *client) GetHash(key, hashKey string) ([]byte, error) {
-	result := c.redisClient.HGet(c.prefix+key, hashKey)
-
-	return result.Bytes()
+	return c.redisClient.HGet(context.Background(), c.prefix+key, hashKey).Bytes()
 }
 
 func (c *client) Set(key string, value []byte, expiration time.Duration) error {
-	return c.redisClient.Set(c.prefix+key, value, expiration).Err()
+	return c.redisClient.Set(context.Background(), c.prefix+key, value, expiration).Err()
 }
 
 func (c *client) SetHash(key, hashKey string, value []byte) error {
-	return c.redisClient.HSet(c.prefix+key, hashKey, value).Err()
+	return c.redisClient.HSet(context.Background(), c.prefix+key, hashKey, value).Err()
 }
 
 func (c *client) Exists(key string) (bool, error) {
-	e, err := c.redisClient.Exists(c.prefix + key).Result()
+	e, err := c.redisClient.Exists(context.Background(), c.prefix+key).Result()
 	if err != nil {
 		return false, err
 	}
 
-	return e == 1, nil
+	return e > 0, nil
 }
 
 func (c *client) ExistsHash(key, hashKey string) (bool, error) {
-	e, err := c.redisClient.HExists(c.prefix+key, hashKey).Result()
-	if err != nil {
-		return false, err
-	}
-
-	return e, nil
+	return c.redisClient.HExists(context.Background(), c.prefix+key, hashKey).Result()
 }
 
 func (c *client) GetMultipleHashKeys(key string, hashKeys []string) (map[string][]byte, error) {
-	results := make(map[string][]byte)
+	values, err := c.redisClient.HMGet(context.Background(), c.prefix+key, hashKeys...).Result()
+	if err != nil {
+		return nil, err
+	}
 
-	for _, hKey := range hashKeys {
-		value, err := c.redisClient.HGet(c.prefix+key, hKey).Bytes()
-		if err == redis.Nil {
+	results := make(map[string][]byte)
+	for i, v := range values {
+		if v == nil {
 			continue
 		}
-
-		if err != nil {
-			log.Fatal("error getting hash key: ", err)
-			return nil, err
+		switch val := v.(type) {
+		case string:
+			results[hashKeys[i]] = []byte(val)
+		case []byte:
+			results[hashKeys[i]] = val
+		default:
+			results[hashKeys[i]] = []byte(fmt.Sprint(val))
 		}
-
-		results[hKey] = value
 	}
 
 	return results, nil
 }
 
 func (c *client) Delete(key string) error {
-	return c.redisClient.Del(c.prefix + key).Err()
+	return c.redisClient.Del(context.Background(), c.prefix+key).Err()
 }
 
 func (c *client) DeleteHash(key, hashKey string) error {
-	return c.redisClient.HDel(c.prefix+key, hashKey).Err()
+	return c.redisClient.HDel(context.Background(), c.prefix+key, hashKey).Err()
 }
 
 func (c *client) GetAllKeys(prefix string, size ...int) ([]string, error) {
 	var pageSize int64
-
 	if len(size) > 0 {
 		pageSize = int64(size[0])
 	} else {
@@ -190,7 +179,7 @@ func (c *client) GetAllKeys(prefix string, size ...int) ([]string, error) {
 
 	for {
 		var scannedKeys []string
-		scannedKeys, cursor, err = c.redisClient.Scan(cursor, fullPrefix, pageSize).Result()
+		scannedKeys, cursor, err = c.redisClient.Scan(context.Background(), cursor, fullPrefix, pageSize).Result()
 		if err != nil {
 			return nil, err
 		}
@@ -214,11 +203,15 @@ func (c *client) DeleteAll(prefix string) error {
 	}
 
 	if len(keys) > 0 {
-		_, err := c.redisClient.Del(keys...).Result()
+		_, err := c.redisClient.Del(context.Background(), keys...).Result()
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (c *client) Close() error {
+	return c.redisClient.Close()
 }
