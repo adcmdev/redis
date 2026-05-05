@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -35,55 +34,45 @@ type client struct {
 	prefix      string
 }
 
-var (
-	once           sync.Once
-	clientInstance *client
-	initErr        error
-)
-
 func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
-	once.Do(func() {
-		address := getAddress(dto.Host)
-		if dto.Network == "" {
-			dto.Network = "tcp"
-		}
+	address := getAddress(dto.Host)
+	if dto.Network == "" {
+		dto.Network = "tcp"
+	}
 
-		rdb := redis.NewClient(&redis.Options{
-			Network:  dto.Network,
-			Addr:     address,
-			Password: dto.Password,
-			DB:       dto.DB,
+	rdb := redis.NewClient(&redis.Options{
+		Network:  dto.Network,
+		Addr:     address,
+		Password: dto.Password,
+		DB:       dto.DB,
 
-			DialTimeout:  10 * time.Second,
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 10 * time.Second,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 
-			MaxRetries:      5,
-			MinRetryBackoff: 50 * time.Millisecond,
-			MaxRetryBackoff: 2 * time.Second,
+		MaxRetries:      5,
+		MinRetryBackoff: 50 * time.Millisecond,
+		MaxRetryBackoff: 2 * time.Second,
 
-			PoolSize:     10 * runtime.NumCPU(),
-			MinIdleConns: 2 * runtime.NumCPU(),
-			PoolTimeout:  30 * time.Second,
+		PoolSize:     10 * runtime.NumCPU(),
+		MinIdleConns: 2 * runtime.NumCPU(),
+		PoolTimeout:  30 * time.Second,
 
-			TLSConfig: dto.TLSConfig,
-			OnConnect: func(ctx context.Context, cn *redis.Conn) error {
-				return nil
-			},
-		})
-
-		if err := rdb.Ping(context.Background()).Err(); err != nil {
-			initErr = err
-			return
-		}
-
-		clientInstance = &client{
-			redisClient: rdb,
-			prefix:      dto.Prefix,
-		}
+		TLSConfig: dto.TLSConfig,
+		OnConnect: func(ctx context.Context, cn *redis.Conn) error {
+			return nil
+		},
 	})
 
-	return clientInstance, initErr
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		_ = rdb.Close()
+		return nil, err
+	}
+
+	return &client{
+		redisClient: rdb,
+		prefix:      dto.Prefix,
+	}, nil
 }
 
 func getAddress(host string) string {
