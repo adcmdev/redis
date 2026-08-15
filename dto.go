@@ -3,8 +3,6 @@ package redis
 import (
 	"crypto/tls"
 	"time"
-
-	"github.com/go-redis/redis"
 )
 
 type CreateNewRedisDTO struct {
@@ -26,5 +24,4 @@ type CreateNewRedisDTO struct {
 	IdleTimeout        time.Duration
 	IdleCheckFrequency time.Duration
 	TLSConfig          *tls.Config
-	OnConnect          func(*redis.Conn) error
 }

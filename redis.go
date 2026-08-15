@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -34,43 +35,61 @@ type client struct {
 	prefix      string
 }
 
+// One shared connection pool for the whole process; each NewClient call gets
+// its own lightweight wrapper carrying its own prefix. The old singleton also
+// reused the first caller's PREFIX, which leaked one module's namespace
+// (e.g. "roles:") into every other caller.
+// ponytail: pool is keyed by the FIRST caller's Host/DB/Password; add a
+// per-address map if a process ever needs two different Redis servers.
+var (
+	once      sync.Once
+	sharedRdb *redis.Client
+	initErr   error
+)
+
 func NewClient(dto CreateNewRedisDTO) (CacheRepository, error) {
-	address := getAddress(dto.Host)
-	if dto.Network == "" {
-		dto.Network = "tcp"
-	}
+	once.Do(func() {
+		address := getAddress(dto.Host)
+		if dto.Network == "" {
+			dto.Network = "tcp"
+		}
 
-	rdb := redis.NewClient(&redis.Options{
-		Network:  dto.Network,
-		Addr:     address,
-		Password: dto.Password,
-		DB:       dto.DB,
+		rdb := redis.NewClient(&redis.Options{
+			Network:  dto.Network,
+			Addr:     address,
+			Password: dto.Password,
+			DB:       dto.DB,
 
-		DialTimeout:  10 * time.Second,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+			DialTimeout:  10 * time.Second,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
 
-		MaxRetries:      5,
-		MinRetryBackoff: 50 * time.Millisecond,
-		MaxRetryBackoff: 2 * time.Second,
+			MaxRetries:      5,
+			MinRetryBackoff: 50 * time.Millisecond,
+			MaxRetryBackoff: 2 * time.Second,
 
-		PoolSize:     10 * runtime.NumCPU(),
-		MinIdleConns: 2 * runtime.NumCPU(),
-		PoolTimeout:  30 * time.Second,
+			PoolSize:     10 * runtime.NumCPU(),
+			MinIdleConns: 2 * runtime.NumCPU(),
+			PoolTimeout:  30 * time.Second,
 
-		TLSConfig: dto.TLSConfig,
-		OnConnect: func(ctx context.Context, cn *redis.Conn) error {
-			return nil
-		},
+			TLSConfig: dto.TLSConfig,
+		})
+
+		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			_ = rdb.Close()
+			initErr = err
+			return
+		}
+
+		sharedRdb = rdb
 	})
 
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		_ = rdb.Close()
-		return nil, err
+	if initErr != nil {
+		return nil, initErr
 	}
 
 	return &client{
-		redisClient: rdb,
+		redisClient: sharedRdb,
 		prefix:      dto.Prefix,
 	}, nil
 }
